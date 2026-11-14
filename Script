@@ -176,26 +176,91 @@ new("UIListLayout", {Padding = UDim.new(0, 6), HorizontalAlignment = Enum.Horizo
 new("UIPadding", {PaddingTop = UDim.new(0, 8), Parent = Side})
 local Pages = new("Frame", {Size = UDim2.new(1, -110, 1, -40), Position = UDim2.fromOffset(110, 40), BackgroundTransparency = 1, Parent = Main})
 
-local tabs, tabButtons = {}, {}
+local tabs, tabButtons, holders = {}, {}, {}
+local currentTab
+
+-- Sliding accent indicator next to the active tab
+local Indicator = new("Frame", {
+	Size = UDim2.fromOffset(3, 18), BackgroundColor3 = C.accent, BorderSizePixel = 0,
+	Position = UDim2.fromOffset(2, 52), ZIndex = 5, Parent = Main,
+}, {corner(2)})
+
+local function moveIndicator(btn, instant)
+	local y = btn.AbsolutePosition.Y - Main.AbsolutePosition.Y + (btn.AbsoluteSize.Y - 18) / 2
+	if instant then
+		Indicator.Position = UDim2.fromOffset(2, y)
+	else
+		tween(Indicator, {Position = UDim2.fromOffset(2, y)}, 0.35, Enum.EasingStyle.Quint)
+	end
+end
+
+local function selectTab(name, instant)
+	if currentTab == name then return end
+	currentTab = name
+
+	for n, b in pairs(tabButtons) do
+		tween(b, {BackgroundTransparency = n == name and 0 or 1, TextColor3 = n == name and C.text or C.sub}, 0.25)
+	end
+	moveIndicator(tabButtons[name], instant)
+
+	local target = holders[name]
+
+	-- fade + slide out every other visible page
+	for n, h in pairs(holders) do
+		if n ~= name and h.Visible then
+			if instant then
+				h.Visible = false
+			else
+				tween(h, {GroupTransparency = 1, Position = UDim2.fromOffset(0, -10)}, 0.15)
+				task.delay(0.16, function()
+					if currentTab ~= n then h.Visible = false end
+				end)
+			end
+		end
+	end
+
+	-- fade + slide in the new page
+	if instant then
+		target.Position = UDim2.fromOffset(0, 0)
+		target.GroupTransparency = 0
+		target.Visible = true
+	else
+		target.Position = UDim2.fromOffset(0, 14)
+		target.GroupTransparency = 1
+		target.Visible = true
+		task.delay(0.08, function()
+			if currentTab == name then
+				tween(target, {GroupTransparency = 0, Position = UDim2.fromOffset(0, 0)}, 0.32, Enum.EasingStyle.Quint)
+			end
+		end)
+	end
+end
+
 local function makeTab(name)
 	local btn = new("TextButton", {
 		Text = name, Font = Enum.Font.GothamMedium, TextSize = 13, TextColor3 = C.sub, BackgroundColor3 = C.item,
 		BackgroundTransparency = 1, Size = UDim2.new(1, -16, 0, 32), AutoButtonColor = false, Parent = Side,
 	}, {corner(8)})
+	local holder = new("CanvasGroup", {
+		Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, BorderSizePixel = 0,
+		Visible = false, Parent = Pages,
+	})
 	local page = new("ScrollingFrame", {
 		Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 3,
 		ScrollBarImageColor3 = C.accent, CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y,
-		Visible = false, Parent = Pages,
+		Parent = holder,
 	})
 	new("UIListLayout", {Padding = UDim.new(0, 8), Parent = page})
 	new("UIPadding", {PaddingTop = UDim.new(0, 10), PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 12), PaddingBottom = UDim.new(0, 10), Parent = page})
-	tabs[name], tabButtons[name] = page, btn
-	btn.MouseButton1Click:Connect(function()
-		for n, p in pairs(tabs) do
-			p.Visible = (n == name)
-			tween(tabButtons[n], {BackgroundTransparency = n == name and 0 or 1, TextColor3 = n == name and C.text or C.sub}, 0.2)
-		end
+	tabs[name], tabButtons[name], holders[name] = page, btn, holder
+
+	btn.MouseEnter:Connect(function()
+		if currentTab ~= name then tween(btn, {BackgroundTransparency = 0.6, TextColor3 = C.text}, 0.15) end
 	end)
+	btn.MouseLeave:Connect(function()
+		if currentTab ~= name then tween(btn, {BackgroundTransparency = 1, TextColor3 = C.sub}, 0.15) end
+	end)
+	btn.MouseButton1Click:Connect(function() selectTab(name) end)
 	return page
 end
 
@@ -602,6 +667,82 @@ RunService.Heartbeat:Connect(function()
 	end
 end)
 
+-- Kill All (for when you are the Chaser and holding a knife)
+local killBusy = false
+
+local function getKnife()
+	local c = char()
+	if not c then return nil end
+	local bp = LP:FindFirstChildOfClass("Backpack")
+	-- prefer a tool named knife, anywhere on you
+	for _, holder in ipairs({c, bp}) do
+		if holder then
+			for _, t in ipairs(holder:GetChildren()) do
+				if t:IsA("Tool") and t.Name:lower():find("knife") then
+					if t.Parent ~= c then t.Parent = c end
+					return t
+				end
+			end
+		end
+	end
+	-- otherwise whatever tool is equipped
+	for _, t in ipairs(c:GetChildren()) do
+		if t:IsA("Tool") then return t end
+	end
+	return nil
+end
+
+local function hitPlayer(p, tool)
+	local r = root()
+	local tc = p.Character
+	local tr = tc and tc:FindFirstChild("HumanoidRootPart")
+	if not (r and tr) then return end
+	r.CFrame = tr.CFrame * CFrame.new(0, 0, 2)
+	pcall(function() tool:Activate() end)
+	local handle = tool:FindFirstChild("Handle") or tool:FindFirstChildWhichIsA("BasePart")
+	if handle and firetouchinterest then
+		for _, name in ipairs({"HumanoidRootPart", "Head", "UpperTorso", "Torso"}) do
+			local part = tc:FindFirstChild(name)
+			if part then
+				pcall(function()
+					firetouchinterest(handle, part, 0)
+					firetouchinterest(handle, part, 1)
+				end)
+			end
+		end
+	end
+end
+
+local function killAll()
+	if killBusy then return end
+	local tool = getKnife()
+	if not tool or not root() then return end
+	killBusy = true
+	local back = root().CFrame
+	for _, p in ipairs(Players:GetPlayers()) do
+		local h = p.Character and p.Character:FindFirstChildOfClass("Humanoid")
+		if p ~= LP and h and h.Health > 0 and not isChaser(p) then
+			hitPlayer(p, tool)
+			task.wait(0.2)
+		end
+	end
+	if root() then root().CFrame = back end
+	killBusy = false
+end
+
+Button(Game, "Kill All (hold your knife as Chaser)", killAll)
+Toggle(Game, "Auto Kill All Loop", false, function(v)
+	G.autoKill = v
+	if v then
+		task.spawn(function()
+			while G.autoKill and Gui.Parent do
+				killAll()
+				task.wait(0.5)
+			end
+		end)
+	end
+end)
+
 -- Misc
 Button(Misc, "FPS Boost", function()
 	pcall(function() settings().Rendering.QualityLevel = Enum.QualityLevel.Level01 end)
@@ -708,7 +849,8 @@ UserInputService.InputBegan:Connect(function(i, gp)
 end)
 
 -- Start
-tabs["Player"].Visible = true
-tabButtons["Player"].BackgroundTransparency = 0
-tabButtons["Player"].TextColor3 = C.text
+task.defer(function()
+	task.wait(0.1)
+	selectTab("Player", true)
+end)
 tween(Main, {Size = FULL}, 0.5, Enum.EasingStyle.Back)
