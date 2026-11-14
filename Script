@@ -1,0 +1,714 @@
+--// Bannaz | smooth dark UI | Delta compatible
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local TweenService = game:GetService("TweenService")
+local Lighting = game:GetService("Lighting")
+local TeleportService = game:GetService("TeleportService")
+local VirtualUser = game:GetService("VirtualUser")
+
+local LP = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
+
+--// GAME CHECK (Huss Valley only)
+-- Add more place IDs here if the match runs in a different place than the lobby
+local SUPPORTED_PLACES = {
+	[107535308163741] = true, -- Huss Valley
+}
+
+if not SUPPORTED_PLACES[game.PlaceId] then
+	local guiParent = (gethui and gethui()) or game:GetService("CoreGui")
+	pcall(function()
+		local old = guiParent:FindFirstChild("BannazUnsupported")
+		if old then old:Destroy() end
+	end)
+
+	local gui = Instance.new("ScreenGui")
+	gui.Name = "BannazUnsupported"
+	gui.ResetOnSpawn = false
+	gui.Parent = guiParent
+
+	local toast = Instance.new("Frame")
+	toast.Size = UDim2.fromOffset(320, 78)
+	toast.AnchorPoint = Vector2.new(0.5, 0)
+	toast.Position = UDim2.new(0.5, 0, 0, -100)
+	toast.BackgroundColor3 = Color3.fromRGB(15, 15, 20)
+	toast.BorderSizePixel = 0
+	toast.Parent = gui
+	Instance.new("UICorner", toast).CornerRadius = UDim.new(0, 12)
+	local st = Instance.new("UIStroke", toast)
+	st.Color = Color3.fromRGB(255, 80, 80)
+	st.Thickness = 1.5
+
+	local title = Instance.new("TextLabel")
+	title.Text = "Bannaz"
+	title.Font = Enum.Font.GothamBold
+	title.TextSize = 15
+	title.TextColor3 = Color3.fromRGB(255, 90, 90)
+	title.BackgroundTransparency = 1
+	title.Position = UDim2.fromOffset(14, 10)
+	title.Size = UDim2.new(1, -28, 0, 18)
+	title.TextXAlignment = Enum.TextXAlignment.Left
+	title.Parent = toast
+
+	local msg = Instance.new("TextLabel")
+	msg.Text = "The game you're in isn't supported.\nBannaz only works in Huss Valley."
+	msg.Font = Enum.Font.GothamMedium
+	msg.TextSize = 13
+	msg.TextColor3 = Color3.fromRGB(235, 235, 245)
+	msg.BackgroundTransparency = 1
+	msg.Position = UDim2.fromOffset(14, 32)
+	msg.Size = UDim2.new(1, -28, 0, 38)
+	msg.TextXAlignment = Enum.TextXAlignment.Left
+	msg.TextYAlignment = Enum.TextYAlignment.Top
+	msg.TextWrapped = true
+	msg.Parent = toast
+
+	TweenService:Create(toast, TweenInfo.new(0.5, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {Position = UDim2.new(0.5, 0, 0, 20)}):Play()
+
+	pcall(function()
+		game:GetService("StarterGui"):SetCore("SendNotification", {
+			Title = "Bannaz",
+			Text = "The game you're in isn't supported.",
+			Duration = 6,
+		})
+	end)
+
+	task.delay(6, function()
+		local tw = TweenService:Create(toast, TweenInfo.new(0.4, Enum.EasingStyle.Quint, Enum.EasingDirection.In), {Position = UDim2.new(0.5, 0, 0, -100)})
+		tw:Play()
+		tw.Completed:Wait()
+		gui:Destroy()
+	end)
+
+	return -- stop the script, nothing else loads
+end
+
+-- Cleanup old copy
+local parentGui = (gethui and gethui()) or game:GetService("CoreGui")
+pcall(function()
+	local old = parentGui:FindFirstChild("BannazHub")
+	if old then old:Destroy() end
+end)
+
+--// THEME
+local C = {
+	bg = Color3.fromRGB(15, 15, 20),
+	panel = Color3.fromRGB(22, 22, 30),
+	item = Color3.fromRGB(30, 30, 41),
+	hover = Color3.fromRGB(40, 40, 55),
+	accent = Color3.fromRGB(120, 90, 255),
+	text = Color3.fromRGB(235, 235, 245),
+	sub = Color3.fromRGB(150, 150, 170),
+	off = Color3.fromRGB(55, 55, 70),
+}
+
+local function tween(obj, props, t, style)
+	local tw = TweenService:Create(obj, TweenInfo.new(t or 0.2, style or Enum.EasingStyle.Quint, Enum.EasingDirection.Out), props)
+	tw:Play()
+	return tw
+end
+
+local function new(class, props, children)
+	local o = Instance.new(class)
+	for k, v in pairs(props or {}) do o[k] = v end
+	for _, c in ipairs(children or {}) do c.Parent = o end
+	return o
+end
+
+local function corner(r) return new("UICorner", {CornerRadius = UDim.new(0, r or 8)}) end
+local function stroke(col, th) return new("UIStroke", {Color = col or C.hover, Thickness = th or 1, Transparency = 0.4}) end
+
+--// STATE
+local S = {
+	speedOn = false, speed = 50,
+	jumpOn = false, jump = 100,
+	infJump = false, noclip = false,
+	fly = false, flySpeed = 70,
+	esp = false, fullbright = false,
+	antiAfk = true, clickTp = false,
+	godLike = false,
+}
+
+--// GUI ROOT
+local Gui = new("ScreenGui", {Name = "BannazHub", ResetOnSpawn = false, ZIndexBehavior = Enum.ZIndexBehavior.Sibling})
+pcall(function() if syn and syn.protect_gui then syn.protect_gui(Gui) end end)
+Gui.Parent = parentGui
+
+local Main = new("Frame", {
+	Size = UDim2.fromOffset(0, 0), Position = UDim2.new(0.5, 0, 0.5, 0), AnchorPoint = Vector2.new(0.5, 0.5),
+	BackgroundColor3 = C.bg, BorderSizePixel = 0, ClipsDescendants = true, Parent = Gui,
+}, {corner(12), stroke(C.accent, 1.5)})
+local FULL = UDim2.fromOffset(460, 320)
+
+-- Title bar
+local Top = new("Frame", {Size = UDim2.new(1, 0, 0, 40), BackgroundColor3 = C.panel, BorderSizePixel = 0, Parent = Main})
+new("TextLabel", {
+	Text = "Bannaz", Font = Enum.Font.GothamBold, TextSize = 16, TextColor3 = C.text,
+	BackgroundTransparency = 1, Position = UDim2.fromOffset(14, 0), Size = UDim2.new(0.6, 0, 1, 0),
+	TextXAlignment = Enum.TextXAlignment.Left, Parent = Top,
+})
+local Close = new("TextButton", {
+	Text = "×", Font = Enum.Font.GothamBold, TextSize = 22, TextColor3 = C.sub, BackgroundColor3 = C.item,
+	Size = UDim2.fromOffset(28, 28), Position = UDim2.new(1, -36, 0.5, -14), AutoButtonColor = false, Parent = Top,
+}, {corner(8)})
+
+-- Dragging
+do
+	local dragging, dragStart, startPos
+	Top.InputBegan:Connect(function(i)
+		if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+			dragging, dragStart, startPos = true, i.Position, Main.Position
+			i.Changed:Connect(function() if i.UserInputState == Enum.UserInputState.End then dragging = false end end)
+		end
+	end)
+	UserInputService.InputChanged:Connect(function(i)
+		if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
+			local d = i.Position - dragStart
+			tween(Main, {Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)}, 0.08)
+		end
+	end)
+end
+
+-- Sidebar + pages
+local Side = new("Frame", {Size = UDim2.new(0, 110, 1, -40), Position = UDim2.fromOffset(0, 40), BackgroundColor3 = C.panel, BorderSizePixel = 0, Parent = Main})
+new("UIListLayout", {Padding = UDim.new(0, 6), HorizontalAlignment = Enum.HorizontalAlignment.Center, Parent = Side})
+new("UIPadding", {PaddingTop = UDim.new(0, 8), Parent = Side})
+local Pages = new("Frame", {Size = UDim2.new(1, -110, 1, -40), Position = UDim2.fromOffset(110, 40), BackgroundTransparency = 1, Parent = Main})
+
+local tabs, tabButtons = {}, {}
+local function makeTab(name)
+	local btn = new("TextButton", {
+		Text = name, Font = Enum.Font.GothamMedium, TextSize = 13, TextColor3 = C.sub, BackgroundColor3 = C.item,
+		BackgroundTransparency = 1, Size = UDim2.new(1, -16, 0, 32), AutoButtonColor = false, Parent = Side,
+	}, {corner(8)})
+	local page = new("ScrollingFrame", {
+		Size = UDim2.new(1, 0, 1, 0), BackgroundTransparency = 1, BorderSizePixel = 0, ScrollBarThickness = 3,
+		ScrollBarImageColor3 = C.accent, CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y,
+		Visible = false, Parent = Pages,
+	})
+	new("UIListLayout", {Padding = UDim.new(0, 8), Parent = page})
+	new("UIPadding", {PaddingTop = UDim.new(0, 10), PaddingLeft = UDim.new(0, 10), PaddingRight = UDim.new(0, 12), PaddingBottom = UDim.new(0, 10), Parent = page})
+	tabs[name], tabButtons[name] = page, btn
+	btn.MouseButton1Click:Connect(function()
+		for n, p in pairs(tabs) do
+			p.Visible = (n == name)
+			tween(tabButtons[n], {BackgroundTransparency = n == name and 0 or 1, TextColor3 = n == name and C.text or C.sub}, 0.2)
+		end
+	end)
+	return page
+end
+
+--// COMPONENTS
+local function Toggle(page, text, default, cb)
+	local state = default
+	local row = new("TextButton", {Text = "", Size = UDim2.new(1, 0, 0, 38), BackgroundColor3 = C.item, AutoButtonColor = false, Parent = page}, {corner(8)})
+	new("TextLabel", {Text = text, Font = Enum.Font.GothamMedium, TextSize = 13, TextColor3 = C.text, BackgroundTransparency = 1,
+		Position = UDim2.fromOffset(12, 0), Size = UDim2.new(1, -70, 1, 0), TextXAlignment = Enum.TextXAlignment.Left, Parent = row})
+	local track = new("Frame", {Size = UDim2.fromOffset(38, 20), Position = UDim2.new(1, -50, 0.5, -10), BackgroundColor3 = state and C.accent or C.off, Parent = row}, {corner(10)})
+	local knob = new("Frame", {Size = UDim2.fromOffset(14, 14), Position = state and UDim2.fromOffset(21, 3) or UDim2.fromOffset(3, 3), BackgroundColor3 = Color3.new(1, 1, 1), Parent = track}, {corner(7)})
+	local function set(v)
+		state = v
+		tween(track, {BackgroundColor3 = v and C.accent or C.off}, 0.2)
+		tween(knob, {Position = v and UDim2.fromOffset(21, 3) or UDim2.fromOffset(3, 3)}, 0.2, Enum.EasingStyle.Back)
+		cb(v)
+	end
+	row.MouseButton1Click:Connect(function() set(not state) end)
+	row.MouseEnter:Connect(function() tween(row, {BackgroundColor3 = C.hover}, 0.15) end)
+	row.MouseLeave:Connect(function() tween(row, {BackgroundColor3 = C.item}, 0.15) end)
+	if default then cb(true) end
+	return set
+end
+
+local function Slider(page, text, min, max, default, cb)
+	local row = new("Frame", {Size = UDim2.new(1, 0, 0, 52), BackgroundColor3 = C.item, Parent = page}, {corner(8)})
+	local label = new("TextLabel", {Text = text, Font = Enum.Font.GothamMedium, TextSize = 13, TextColor3 = C.text, BackgroundTransparency = 1,
+		Position = UDim2.fromOffset(12, 6), Size = UDim2.new(0.7, 0, 0, 18), TextXAlignment = Enum.TextXAlignment.Left, Parent = row})
+	local val = new("TextLabel", {Text = tostring(default), Font = Enum.Font.GothamBold, TextSize = 13, TextColor3 = C.accent, BackgroundTransparency = 1,
+		Position = UDim2.new(0.7, 0, 0, 6), Size = UDim2.new(0.3, -12, 0, 18), TextXAlignment = Enum.TextXAlignment.Right, Parent = row})
+	local bar = new("Frame", {Size = UDim2.new(1, -24, 0, 6), Position = UDim2.new(0, 12, 0, 34), BackgroundColor3 = C.off, Parent = row}, {corner(3)})
+	local fill = new("Frame", {Size = UDim2.fromScale((default - min) / (max - min), 1), BackgroundColor3 = C.accent, Parent = bar}, {corner(3)})
+	local dragging = false
+	local function update(x)
+		local rel = math.clamp((x - bar.AbsolutePosition.X) / bar.AbsoluteSize.X, 0, 1)
+		local v = math.floor(min + (max - min) * rel)
+		tween(fill, {Size = UDim2.fromScale(rel, 1)}, 0.08)
+		val.Text = tostring(v)
+		cb(v)
+	end
+	bar.InputBegan:Connect(function(i)
+		if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+			dragging = true; update(i.Position.X)
+		end
+	end)
+	UserInputService.InputEnded:Connect(function(i)
+		if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then dragging = false end
+	end)
+	UserInputService.InputChanged:Connect(function(i)
+		if dragging and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then update(i.Position.X) end
+	end)
+end
+
+local function Button(page, text, cb)
+	local b = new("TextButton", {Text = text, Font = Enum.Font.GothamMedium, TextSize = 13, TextColor3 = C.text, BackgroundColor3 = C.item,
+		Size = UDim2.new(1, 0, 0, 36), AutoButtonColor = false, Parent = page}, {corner(8)})
+	b.MouseEnter:Connect(function() tween(b, {BackgroundColor3 = C.hover}, 0.15) end)
+	b.MouseLeave:Connect(function() tween(b, {BackgroundColor3 = C.item}, 0.15) end)
+	b.MouseButton1Click:Connect(function()
+		tween(b, {BackgroundColor3 = C.accent}, 0.1)
+		task.delay(0.15, function() tween(b, {BackgroundColor3 = C.item}, 0.25) end)
+		cb()
+	end)
+end
+
+--// PROFILE CARD (bottom-left corner)
+do
+	local card = new("Frame", {
+		Size = UDim2.new(0, 98, 0, 46), Position = UDim2.new(0, 6, 1, -52),
+		BackgroundColor3 = C.item, BorderSizePixel = 0, Parent = Main,
+	}, {corner(10), stroke(C.accent, 1)})
+
+	local avatar = new("ImageLabel", {
+		Size = UDim2.fromOffset(34, 34), Position = UDim2.fromOffset(6, 6),
+		BackgroundColor3 = C.off, BorderSizePixel = 0, Image = "", Parent = card,
+	}, {corner(17), stroke(C.accent, 1.5)})
+
+	new("TextLabel", {
+		Text = LP.DisplayName, Font = Enum.Font.GothamBold, TextSize = 11, TextColor3 = C.text,
+		BackgroundTransparency = 1, Position = UDim2.fromOffset(44, 7), Size = UDim2.new(1, -48, 0, 14),
+		TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd, Parent = card,
+	})
+	new("TextLabel", {
+		Text = "@" .. LP.Name, Font = Enum.Font.Gotham, TextSize = 10, TextColor3 = C.sub,
+		BackgroundTransparency = 1, Position = UDim2.fromOffset(44, 22), Size = UDim2.new(1, -48, 0, 14),
+		TextXAlignment = Enum.TextXAlignment.Left, TextTruncate = Enum.TextTruncate.AtEnd, Parent = card,
+	})
+
+	task.spawn(function()
+		local ok, img = pcall(function()
+			return Players:GetUserThumbnailAsync(LP.UserId, Enum.ThumbnailType.HeadShot, Enum.ThumbnailSize.Size100x100)
+		end)
+		if ok and img then
+			avatar.Image = img
+			avatar.ImageTransparency = 1
+			tween(avatar, {ImageTransparency = 0}, 0.5)
+		end
+	end)
+end
+
+--// HELPERS
+local function char() return LP.Character end
+local function hum() local c = char(); return c and c:FindFirstChildOfClass("Humanoid") end
+local function root() local c = char(); return c and c:FindFirstChild("HumanoidRootPart") end
+
+--// TABS
+local Player = makeTab("Player")
+local Game = makeTab("Game")
+local Visuals = makeTab("Visuals")
+local Teleport = makeTab("Teleport")
+local Misc = makeTab("Misc")
+
+-- Player
+Toggle(Player, "Speed Hack", false, function(v) S.speedOn = v; if not v and hum() then hum().WalkSpeed = 16 end end)
+Slider(Player, "Walk Speed", 16, 300, 50, function(v) S.speed = v end)
+Toggle(Player, "Jump Power", false, function(v) S.jumpOn = v; if not v and hum() then hum().JumpPower = 50 end end)
+Slider(Player, "Jump Height", 50, 400, 100, function(v) S.jump = v end)
+Toggle(Player, "Infinite Jump", false, function(v) S.infJump = v end)
+Toggle(Player, "Noclip", false, function(v) S.noclip = v end)
+Toggle(Player, "Fly", false, function(v) S.fly = v end)
+Slider(Player, "Fly Speed", 20, 300, 70, function(v) S.flySpeed = v end)
+
+-- Visuals
+local espObjects = {}
+local function clearESP(p)
+	if espObjects[p] then for _, o in pairs(espObjects[p]) do pcall(function() o:Destroy() end) end espObjects[p] = nil end
+end
+local function applyESP(p)
+	if p == LP or not p.Character then return end
+	clearESP(p)
+	local hl = new("Highlight", {FillColor = C.accent, OutlineColor = Color3.new(1, 1, 1), FillTransparency = 0.6, DepthMode = Enum.HighlightDepthMode.AlwaysOnTop, Parent = p.Character})
+	local head = p.Character:FindFirstChild("Head")
+	local bb
+	if head then
+		bb = new("BillboardGui", {Size = UDim2.fromOffset(120, 20), StudsOffset = Vector3.new(0, 2.5, 0), AlwaysOnTop = true, Adornee = head, Parent = head}, {
+			new("TextLabel", {Text = p.DisplayName, Font = Enum.Font.GothamBold, TextSize = 13, TextColor3 = Color3.new(1, 1, 1), TextStrokeTransparency = 0.5, BackgroundTransparency = 1, Size = UDim2.fromScale(1, 1)}),
+		})
+	end
+	espObjects[p] = {hl, bb}
+end
+local function refreshESP()
+	for _, p in ipairs(Players:GetPlayers()) do
+		if S.esp then applyESP(p) else clearESP(p) end
+	end
+end
+Toggle(Visuals, "Player ESP", false, function(v) S.esp = v; refreshESP() end)
+Players.PlayerAdded:Connect(function(p)
+	p.CharacterAdded:Connect(function() task.wait(1); if S.esp then applyESP(p) end end)
+end)
+for _, p in ipairs(Players:GetPlayers()) do
+	p.CharacterAdded:Connect(function() task.wait(1); if S.esp then applyESP(p) end end)
+end
+Players.PlayerRemoving:Connect(clearESP)
+
+local oldLight = {Brightness = Lighting.Brightness, ClockTime = Lighting.ClockTime, FogEnd = Lighting.FogEnd, Ambient = Lighting.Ambient}
+Toggle(Visuals, "Fullbright", false, function(v)
+	S.fullbright = v
+	if v then
+		Lighting.Brightness = 2; Lighting.ClockTime = 14; Lighting.FogEnd = 1e6; Lighting.Ambient = Color3.new(1, 1, 1)
+	else
+		for k, val in pairs(oldLight) do Lighting[k] = val end
+	end
+end)
+Slider(Visuals, "Field of View", 40, 120, 70, function(v) Camera.FieldOfView = v end)
+
+-- Teleport
+local selected
+local function playerList()
+	for _, c in ipairs(Teleport:GetChildren()) do if c:IsA("TextButton") then c:Destroy() end end
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p ~= LP then
+			Button(Teleport, "TP to " .. p.DisplayName, function()
+				if p.Character and p.Character:FindFirstChild("HumanoidRootPart") and root() then
+					root().CFrame = p.Character.HumanoidRootPart.CFrame * CFrame.new(0, 0, 3)
+				end
+			end)
+		end
+	end
+end
+Toggle(Teleport, "Click TP (hold Ctrl / tap)", false, function(v) S.clickTp = v end)
+Button(Teleport, "Refresh Player List", playerList)
+playerList()
+
+local Mouse = LP:GetMouse()
+Mouse.Button1Down:Connect(function()
+	if S.clickTp and (UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) or UserInputService.TouchEnabled) and root() then
+		root().CFrame = CFrame.new(Mouse.Hit.Position + Vector3.new(0, 3, 0))
+	end
+end)
+
+-- Game (Huss Valley: one Chaser, runners cross the map, caught = Chaser)
+local G = {chaserEsp = false, alert = false, flee = false, fleeDist = 30, antiVoid = false, finish = nil, lastSafe = nil}
+
+local function isChaser(p)
+	local c = p.Character
+	if p.Team and p.Team.Name:lower():find("chas") then return true end
+	for _, n in ipairs({"Chaser", "IsChaser", "chaser", "isChaser", "Role", "Seeker", "It", "Tagged"}) do
+		local a = p:GetAttribute(n)
+		if a == nil and c then a = c:GetAttribute(n) end
+		if a == true or (type(a) == "string" and a:lower():find("chas")) then return true end
+	end
+	if c then
+		for _, t in ipairs(c:GetChildren()) do
+			if t:IsA("Tool") and t.Name:lower():find("knife") then return true end
+		end
+		local bp = p:FindFirstChildOfClass("Backpack")
+		if bp then
+			for _, t in ipairs(bp:GetChildren()) do
+				if t:IsA("Tool") and t.Name:lower():find("knife") then return true end
+			end
+		end
+	end
+	return false
+end
+
+local function nearestChaser()
+	local r = root()
+	if not r then return nil, math.huge end
+	local best, bd = nil, math.huge
+	for _, p in ipairs(Players:GetPlayers()) do
+		if p ~= LP and p.Character and p.Character:FindFirstChild("HumanoidRootPart") and isChaser(p) then
+			local d = (p.Character.HumanoidRootPart.Position - r.Position).Magnitude
+			if d < bd then best, bd = p, d end
+		end
+	end
+	return best, bd
+end
+
+local statusLabel = new("TextLabel", {
+	Text = "Nearest chaser: --", Font = Enum.Font.GothamBold, TextSize = 13, TextColor3 = C.accent,
+	BackgroundColor3 = C.item, Size = UDim2.new(1, 0, 0, 34), Parent = Game,
+}, {corner(8)})
+
+Toggle(Game, "Chaser ESP (red = chaser, green = runner)", false, function(v) G.chaserEsp = v end)
+Toggle(Game, "Chaser Proximity Alert", false, function(v) G.alert = v end)
+Toggle(Game, "Auto Flee (escape near chaser)", false, function(v) G.flee = v end)
+Slider(Game, "Flee Distance", 10, 80, 30, function(v) G.fleeDist = v end)
+Toggle(Game, "Anti Void (auto return if you fall)", false, function(v) G.antiVoid = v end)
+Button(Game, "Save Finish Position (stand at the end)", function()
+	if root() then G.finish = root().CFrame end
+end)
+Button(Game, "Teleport to Finish", function()
+	if G.finish and root() then root().CFrame = G.finish + Vector3.new(0, 3, 0) end
+end)
+
+local gameESP = {}
+local function setGameESP(p, chaser)
+	local c = p.Character
+	if not c then return end
+	local hl = gameESP[p]
+	if not hl or hl.Parent ~= c then
+		if hl then hl:Destroy() end
+		hl = new("Highlight", {FillTransparency = 0.45, OutlineColor = Color3.new(1, 1, 1), DepthMode = Enum.HighlightDepthMode.AlwaysOnTop, Parent = c})
+		gameESP[p] = hl
+	end
+	hl.FillColor = chaser and Color3.fromRGB(255, 50, 50) or Color3.fromRGB(60, 255, 120)
+end
+
+task.spawn(function()
+	local lastFlee = 0
+	while Gui.Parent do
+		task.wait(0.15)
+		-- ESP
+		for _, p in ipairs(Players:GetPlayers()) do
+			if p ~= LP then
+				if G.chaserEsp then
+					setGameESP(p, isChaser(p))
+				elseif gameESP[p] then
+					gameESP[p]:Destroy(); gameESP[p] = nil
+				end
+			end
+		end
+		-- status
+		local cp, d = nearestChaser()
+		if cp then
+			statusLabel.Text = ("Nearest chaser: %s (%d studs)"):format(cp.DisplayName, d)
+			tween(statusLabel, {TextColor3 = d < 40 and Color3.fromRGB(255, 80, 80) or C.accent}, 0.2)
+			if G.alert and d < 40 then
+				tween(Main, {BackgroundColor3 = Color3.fromRGB(45, 15, 15)}, 0.15)
+				task.delay(0.2, function() tween(Main, {BackgroundColor3 = C.bg}, 0.3) end)
+			end
+			-- auto flee
+			local r = root()
+			if G.flee and r and d < G.fleeDist and tick() - lastFlee > 1 and cp.Character then
+				lastFlee = tick()
+				if G.finish then
+					r.CFrame = G.finish + Vector3.new(0, 3, 0)
+				else
+					local away = (r.Position - cp.Character.HumanoidRootPart.Position) * Vector3.new(1, 0, 1)
+					if away.Magnitude > 0 then r.CFrame = r.CFrame + away.Unit * 45 + Vector3.new(0, 2, 0) end
+				end
+			end
+		else
+			statusLabel.Text = "Nearest chaser: none found"
+		end
+		-- anti void
+		local h, r = hum(), root()
+		if h and r then
+			if h.FloorMaterial ~= Enum.Material.Air and r.Position.Y > -50 then
+				G.lastSafe = r.CFrame
+			elseif G.antiVoid and G.lastSafe and r.Position.Y < G.lastSafe.Position.Y - 60 then
+				r.AssemblyLinearVelocity = Vector3.zero
+				r.CFrame = G.lastSafe + Vector3.new(0, 4, 0)
+			end
+		end
+	end
+end)
+
+-- Extra Game features
+local X = {spectate = false, tracer = false, airWalk = false, antiRagdoll = false, bhop = false}
+
+Toggle(Game, "Spectate Nearest Chaser", false, function(v)
+	X.spectate = v
+	if not v and hum() then Camera.CameraSubject = hum() end
+end)
+Toggle(Game, "Chaser Tracer Line", false, function(v) X.tracer = v end)
+
+local touchBackup = {}
+Toggle(Game, "Anti Kill Parts (may disable finish too)", false, function(v)
+	if v then
+		for _, d in ipairs(workspace:GetDescendants()) do
+			if d:IsA("BasePart") and d.CanTouch and d:FindFirstChildOfClass("TouchInterest") then
+				local m = d:FindFirstAncestorOfClass("Model")
+				if not (m and m:FindFirstChildOfClass("Humanoid")) then
+					touchBackup[d] = true
+					d.CanTouch = false
+				end
+			end
+		end
+	else
+		for d in pairs(touchBackup) do pcall(function() d.CanTouch = true end) end
+		touchBackup = {}
+	end
+end)
+
+Toggle(Game, "Anti Ragdoll / Anti Stun", false, function(v) X.antiRagdoll = v end)
+Toggle(Game, "Auto Bhop", false, function(v) X.bhop = v end)
+
+local airPart
+Toggle(Game, "Air Walk (invisible floor)", false, function(v)
+	X.airWalk = v
+	if not v and airPart then airPart:Destroy(); airPart = nil end
+end)
+
+Slider(Game, "Gravity", 20, 300, 196, function(v) workspace.Gravity = v end)
+Button(Game, "Reset Gravity", function() workspace.Gravity = 196.2 end)
+
+local tracerLine
+pcall(function()
+	tracerLine = Drawing.new("Line")
+	tracerLine.Thickness = 2
+	tracerLine.Color = Color3.fromRGB(255, 60, 60)
+	tracerLine.Visible = false
+end)
+
+RunService.RenderStepped:Connect(function()
+	-- spectate
+	if X.spectate then
+		local cp = nearestChaser()
+		if cp and cp.Character and cp.Character:FindFirstChildOfClass("Humanoid") then
+			Camera.CameraSubject = cp.Character:FindFirstChildOfClass("Humanoid")
+		end
+	end
+	-- tracer
+	if tracerLine then
+		local cp = X.tracer and nearestChaser()
+		if cp and cp.Character and cp.Character:FindFirstChild("HumanoidRootPart") then
+			local pos, vis = Camera:WorldToViewportPoint(cp.Character.HumanoidRootPart.Position)
+			tracerLine.From = Vector2.new(Camera.ViewportSize.X / 2, Camera.ViewportSize.Y)
+			tracerLine.To = Vector2.new(pos.X, pos.Y)
+			tracerLine.Visible = vis
+		else
+			tracerLine.Visible = false
+		end
+	end
+end)
+
+RunService.Heartbeat:Connect(function()
+	local h, r = hum(), root()
+	if not h or not r then return end
+	if X.antiRagdoll then
+		pcall(function()
+			h:SetStateEnabled(Enum.HumanoidStateType.Ragdoll, false)
+			h:SetStateEnabled(Enum.HumanoidStateType.FallingDown, false)
+		end)
+		local st = h:GetState()
+		if st == Enum.HumanoidStateType.Ragdoll or st == Enum.HumanoidStateType.FallingDown then
+			h:ChangeState(Enum.HumanoidStateType.GettingUp)
+		end
+		if not S.fly then h.PlatformStand = false end
+	end
+	if X.bhop and h.FloorMaterial ~= Enum.Material.Air and h.MoveDirection.Magnitude > 0 then
+		h.Jump = true
+	end
+	if X.airWalk then
+		if not airPart then
+			airPart = new("Part", {Size = Vector3.new(10, 1, 10), Anchored = true, Transparency = 1, CanCollide = true, Name = "HVAir", Parent = workspace})
+		end
+		-- floor stays at the height you were on; hold Ctrl (or toggle off/on) to re-level it to you
+		local y = airPart:GetAttribute("Y") or (r.Position.Y - 3.5)
+		if UserInputService:IsKeyDown(Enum.KeyCode.LeftControl) then y = r.Position.Y - 3.5 end
+		airPart:SetAttribute("Y", y)
+		airPart.Position = Vector3.new(r.Position.X, y, r.Position.Z)
+	end
+end)
+
+-- Misc
+Button(Misc, "FPS Boost", function()
+	pcall(function() settings().Rendering.QualityLevel = Enum.QualityLevel.Level01 end)
+	for _, d in ipairs(workspace:GetDescendants()) do
+		if d:IsA("BasePart") then d.Material = Enum.Material.SmoothPlastic; d.CastShadow = false
+		elseif d:IsA("ParticleEmitter") or d:IsA("Trail") or d:IsA("Smoke") or d:IsA("Fire") then d.Enabled = false end
+	end
+	for _, e in ipairs(Lighting:GetChildren()) do
+		if e:IsA("PostEffect") or e:IsA("Atmosphere") then e.Enabled = false end
+	end
+	Lighting.GlobalShadows = false
+end)
+Button(Misc, "Server Hop", function()
+	pcall(function()
+		local data = game:GetService("HttpService"):JSONDecode(game:HttpGet("https://games.roblox.com/v1/games/" .. game.PlaceId .. "/servers/Public?sortOrder=Asc&limit=100"))
+		for _, s in ipairs(data.data) do
+			if s.playing < s.maxPlayers and s.id ~= game.JobId then
+				TeleportService:TeleportToPlaceInstance(game.PlaceId, s.id, LP)
+				return
+			end
+		end
+	end)
+end)
+Button(Misc, "Copy Server JobId", function() pcall(function() setclipboard(game.JobId) end) end)
+Toggle(Misc, "Anti AFK", true, function(v) S.antiAfk = v end)
+Button(Misc, "Reset Character", function() if hum() then hum().Health = 0 end end)
+Button(Misc, "Rejoin Server", function() TeleportService:Teleport(game.PlaceId, LP) end)
+Button(Misc, "Destroy Hub", function()
+	S = {}
+	Gui:Destroy()
+end)
+
+--// LOOPS
+LP.Idled:Connect(function()
+	if S.antiAfk then
+		VirtualUser:CaptureController()
+		VirtualUser:ClickButton2(Vector2.new())
+	end
+end)
+
+UserInputService.JumpRequest:Connect(function()
+	if S.infJump and hum() then hum():ChangeState(Enum.HumanoidStateType.Jumping) end
+end)
+
+local flyBV, flyBG
+RunService.Stepped:Connect(function()
+	if S.noclip and char() then
+		for _, p in ipairs(char():GetDescendants()) do
+			if p:IsA("BasePart") then p.CanCollide = false end
+		end
+	end
+end)
+
+RunService.Heartbeat:Connect(function()
+	local h, r = hum(), root()
+	if not h or not r then return end
+	if S.speedOn then h.WalkSpeed = S.speed end
+	if S.jumpOn then h.UseJumpPower = true; h.JumpPower = S.jump end
+
+	if S.fly then
+		if not flyBV or flyBV.Parent ~= r then
+			if flyBV then flyBV:Destroy() end
+			if flyBG then flyBG:Destroy() end
+			flyBV = new("BodyVelocity", {MaxForce = Vector3.new(1e9, 1e9, 1e9), Velocity = Vector3.zero, Parent = r})
+			flyBG = new("BodyGyro", {MaxTorque = Vector3.new(1e9, 1e9, 1e9), P = 9e4, CFrame = r.CFrame, Parent = r})
+		end
+		h.PlatformStand = true
+		local cf = Camera.CFrame
+		local rel = cf:VectorToObjectSpace(h.MoveDirection)
+		local vel = cf.RightVector * rel.X * S.flySpeed + cf.LookVector * (-rel.Z) * S.flySpeed
+		if UserInputService:IsKeyDown(Enum.KeyCode.Space) then vel += Vector3.new(0, S.flySpeed, 0) end
+		if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then vel -= Vector3.new(0, S.flySpeed, 0) end
+		flyBV.Velocity = vel
+		flyBG.CFrame = cf
+	elseif flyBV then
+		flyBV:Destroy(); flyBG:Destroy(); flyBV, flyBG = nil, nil
+		h.PlatformStand = false
+	end
+end)
+
+--// OPEN / CLOSE
+local open = true
+local function setOpen(v)
+	open = v
+	if v then
+		Main.Visible = true
+		tween(Main, {Size = FULL}, 0.4, Enum.EasingStyle.Back)
+	else
+		tween(Main, {Size = UDim2.fromOffset(0, 0)}, 0.25).Completed:Connect(function() if not open then Main.Visible = false end end)
+	end
+end
+Close.MouseButton1Click:Connect(function() setOpen(false) end)
+Close.MouseEnter:Connect(function() tween(Close, {TextColor3 = Color3.fromRGB(255, 90, 90)}, 0.15) end)
+Close.MouseLeave:Connect(function() tween(Close, {TextColor3 = C.sub}, 0.15) end)
+
+-- Floating toggle button (mobile friendly)
+local Float = new("TextButton", {
+	Text = "B", Font = Enum.Font.GothamBold, TextSize = 14, TextColor3 = C.text, BackgroundColor3 = C.panel,
+	Size = UDim2.fromOffset(42, 42), Position = UDim2.new(0, 14, 0.5, -21), AutoButtonColor = false, Parent = Gui,
+}, {corner(21), stroke(C.accent, 1.5)})
+Float.MouseButton1Click:Connect(function() setOpen(not open) end)
+UserInputService.InputBegan:Connect(function(i, gp)
+	if not gp and i.KeyCode == Enum.KeyCode.RightShift then setOpen(not open) end
+end)
+
+-- Start
+tabs["Player"].Visible = true
+tabButtons["Player"].BackgroundTransparency = 0
+tabButtons["Player"].TextColor3 = C.text
+tween(Main, {Size = FULL}, 0.5, Enum.EasingStyle.Back)
