@@ -1,1 +1,2 @@
 Bannaz is huss valley script with multiple things
+Code - loadstring(game:HttpGet("https://raw.githubusercontent.com/CuzTricky/Bannaz/refs/heads/main/Script"))()
